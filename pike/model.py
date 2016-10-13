@@ -430,6 +430,7 @@ class Connection(transport.Transport):
         self._binding_key = None
         self._settings = {}
         self._pre_auth_integrity_hash = array.array('B', "\0"*64)
+        self.accounting_callback = None
         self.connection_future = Future()
         self.credits = 1
         self.client = client
@@ -623,6 +624,8 @@ class Connection(transport.Transport):
                 # Last command in chain, ready to send packet
                 self.smb3_pa_integrity(req)
                 result = req.parent.serialize()
+                if self.accounting_callback is not None:
+                    self.accounting_callback(req.parent)
                 if trace:
                     self.client.logger.debug('send (%s/%s -> %s/%s): %s',
                                              self.local_addr[0], self.local_addr[1],
@@ -665,6 +668,8 @@ class Connection(transport.Transport):
                                      self.remote_addr[0], self.remote_addr[1],
                                      self.local_addr[0], self.local_addr[1],
                                      ', '.join(f[0].__class__.__name__ for f in res))
+        if self.accounting_callback is not None:
+            self.accounting_callback(res)
         for smb_res in res:
             self.smb3_pa_integrity(smb_res, smb_res.parent.buf[4:])
             self.credits -= smb_res.credit_charge
@@ -1021,6 +1026,9 @@ class Connection(transport.Transport):
     #
     # SMB2 context upcalls
     #
+    def session(self, session_id):
+        return self._sessions.get(session_id, None)
+
     def signing_key(self, session_id):
         if session_id in self._sessions:
             session = self._sessions[session_id]
@@ -1060,6 +1068,8 @@ class Session(object):
             self.encryption_context is not None:
             self.encrypt_data = True
         self._channels = {}
+        self._trees = {}
+        self.user = None
 
     def addchannel(self, conn, signing_key):
         channel = Channel(conn, self, signing_key)
@@ -1073,6 +1083,9 @@ class Session(object):
 
     def first_channel(self):
         return self._channels.itervalues().next()
+
+    def tree(self, tree_id):
+        return self._trees.get(tree_id, None)
 
 class Channel(object):
     def __init__(self, connection, session, signing_key):
@@ -1644,6 +1657,7 @@ class Tree(object):
         self.encrypt_data = False
         if smb_res[0].share_flags & smb2.SMB2_SHAREFLAG_ENCRYPT_DATA:
             self.encrypt_data = True
+        self.session._trees[self.tree_id] = self
 
 class Open(object):
     def __init__(self, tree, smb_res, create_guid=None, prev=None):
