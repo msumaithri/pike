@@ -50,6 +50,9 @@ typedef struct _SEC_WINNT_AUTH_IDENTITY
 #define GSS_MECH_NTLM       "\x2b\x06\x01\x04\x01\x82\x37\x02\x02\x0a"
 #define GSS_MECH_NTLM_LEN   10
 
+#define GSS_MECH_SPNEGO     "\x2b\x06\x01\x05\x05\x02"
+#define GSS_MECH_SPNEGO_LEN 6
+
 char* server_principal_details(const char* service, const char* hostname)
 {
     char match[1024];
@@ -148,7 +151,13 @@ int authenticate_gss_client_init(const char* service, const char *user, const ch
         .length = GSS_MECH_NTLM_LEN,
         .elements = GSS_MECH_NTLM
     };
-    
+    static gss_OID_desc gssSpnegoOidDesc =
+    {
+        .length = GSS_MECH_SPNEGO_LEN,
+        .elements = GSS_MECH_SPNEGO
+    };
+    static gss_OID_set_desc spnegoMech = {1, &gssSpnegoOidDesc};
+
     state->server_name = GSS_C_NO_NAME;
     state->context = GSS_C_NO_CONTEXT;
     state->cred = GSS_C_NO_CREDENTIAL;
@@ -207,7 +216,7 @@ int authenticate_gss_client_init(const char* service, const char *user, const ch
                        &min_stat,
                        NULL,
                        0,
-                       &desiredMechs,
+                       &spnegoMech,
                        GSS_C_INITIATE,
                        &state->cred,
                        NULL,
@@ -217,6 +226,17 @@ int authenticate_gss_client_init(const char* service, const char *user, const ch
             set_gss_error(maj_stat, min_stat);
             ret = AUTH_GSS_ERROR;
             goto end;
+        }
+
+        maj_stat = gss_set_neg_mechs(
+                       &min_stat,
+                       state->cred,
+                       &desiredMechs);
+        if (GSS_ERROR(maj_stat))
+        {
+                set_gss_error(maj_stat, min_stat);
+                ret = AUTH_GSS_ERROR;
+                goto end;
         }
 
         break;
@@ -261,7 +281,7 @@ int authenticate_gss_client_init(const char* service, const char *user, const ch
                            &min_stat,
                            client_name,
                            0,
-                           &desiredMechs,
+                           &spnegoMech,
                            GSS_C_INITIATE,
                            &state->cred,
                            NULL,
@@ -271,6 +291,17 @@ int authenticate_gss_client_init(const char* service, const char *user, const ch
                 set_gss_error(maj_stat, min_stat);
                 ret = AUTH_GSS_ERROR;
                 goto end;
+            }
+
+            maj_stat = gss_set_neg_mechs(
+                           &min_stat,
+                           state->cred,
+                           &desiredMechs);
+            if (GSS_ERROR(maj_stat))
+            {
+                 set_gss_error(maj_stat, min_stat);
+                 ret = AUTH_GSS_ERROR;
+                 goto end;
             }
 
             if (password && strlen(password) && domain && strlen(domain))
@@ -372,7 +403,7 @@ int authenticate_gss_client_step(gss_client_state* state, int length, const char
     int ret = AUTH_GSS_CONTINUE;
 
     static gss_OID_desc gss_spnego_mech_oid_desc =
-      {6, (void *)"\x2b\x06\x01\x05\x05\x02"};
+      {GSS_MECH_SPNEGO_LEN, (void *)GSS_MECH_SPNEGO};
     
     // Always clear out the old response
     if (state->response != NULL)
